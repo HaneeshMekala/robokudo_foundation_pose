@@ -1,10 +1,21 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.22)
 project(robokudo_cad_data)
 
-find_package(catkin REQUIRED)
-catkin_package()  # no libraries or executables
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
+
+include_directories(include)
+
+ament_export_include_directories(include)
+ament_export_dependencies(rclcpp std_msgs)
 
 install(DIRECTORY meshes/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/meshes
-  PATTERN ".svn" EXCLUDE)
+  DESTINATION share/${PROJECT_NAME}/meshes
+)
 
+ament_package()

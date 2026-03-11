@@ -1,37 +1,36 @@
 <?xml version="1.0"?>
-<package format="2">
+<package format="3">
   <name>robokudo_foundation_pose</name>
   <version>0.0.1</version>
   <description>
-    ROS Noetic catkin package wrapping the FoundationPose 6D pose estimator for inference-only use.
+    ROS2 Jazzy package wrapping the FoundationPose 6D pose estimator for inference-only use.
   </description>
   <maintainer email="user@example.com">Your Name</maintainer>
   <license>BSD</license>
 
-  <buildtool_depend>catkin</buildtool_depend>
-  <buildtool_depend>python3</buildtool_depend>
-
-  <build_depend>pybind11</build_depend>
-  <build_depend>eigen</build_depend>
+  <build_depend>robokudo</build_depend>
+  <build_depend>rclpy</build_depend>
   <build_depend>numpy</build_depend>
   <build_depend>open3d</build_depend>
   <build_depend>torch</build_depend>
-  <build_depend>roscpp</build_depend>
 
-  <build_depend>robokudo</build_depend>
-  <build_depend>rospy</build_depend>
   <build_export_depend>robokudo</build_export_depend>
-  <build_export_depend>rospy</build_export_depend>
+  <build_export_depend>rclpy</build_export_depend>
+  
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  
   <exec_depend>robokudo</exec_depend>
-  <exec_depend>rospy</exec_depend>
-  <exec_depend>roscpp</exec_depend>
-  
-  
-
-  <exec_depend>python3</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>numpy</exec_depend>
   <exec_depend>open3d</exec_depend>
   <exec_depend>torch</exec_depend>
+  
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 
 </package>
 

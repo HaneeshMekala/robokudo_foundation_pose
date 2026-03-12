@@ -36,7 +36,7 @@ from typing_extensions import Optional, Dict, Any
 # get robokudo logger
 import logging
 import robokudo.defs
-rk_logger = logging.getLogger(robokudo.defs.PACKAGE_NAME) if True else logging.getLogger("dummy")
+rk_logger = logging.getLogger(robokudo.defs.PACKAGE_NAME) if False else logging.getLogger("dummy")
 
 
 def cluster_poses_numpy(angle_diff: float, dist_diff: float, poses_in: np.ndarray, symmetry_tfs: Optional[np.ndarray],
@@ -98,7 +98,9 @@ class FoundationPose:
         self.ignore_normal_flip = True
         self.debug = debug
         self.debug_dir = debug_dir
-        os.makedirs(debug_dir, exist_ok=True)
+
+        if self.debug:
+            os.makedirs(debug_dir, exist_ok=True)
 
         self.rot_grid = None
         self.model_center = None
@@ -117,6 +119,7 @@ class FoundationPose:
 
         self.pose_last = None   # Used for tracking; per the centered mesh
 
+    @torch.no_grad()
     def reset_object(self, mesh, symmetry_tfs=None):
         max_xyz = mesh.vertices.max(axis=0)
         min_xyz = mesh.vertices.min(axis=0)
@@ -138,6 +141,7 @@ class FoundationPose:
 
         rk_logger.info("reset done")
 
+    @torch.no_grad()
     def get_object_settings(self, mesh, symmetry_tfs=None) -> Dict[str, Any]:
         settings = {}
 
@@ -146,7 +150,7 @@ class FoundationPose:
         settings["model_center"] = (min_xyz + max_xyz) / 2
 
         mesh = mesh.copy()
-        mesh.vertices = mesh.vertices - self.model_center.reshape(1, 3)
+        mesh.vertices = mesh.vertices - settings["model_center"].reshape(1, 3)
 
         settings["diameter"] = compute_mesh_diameter(model_pts=mesh.vertices, n_sample=10000)
 
@@ -174,6 +178,7 @@ class FoundationPose:
 
         rk_logger.info("reset done")
 
+    @torch.no_grad()
     def get_tf_to_centered_mesh(self):
         tf_to_center = torch.eye(4, dtype=torch.float, device="cuda")
         tf_to_center[:3, 3] = -torch.as_tensor(self.model_center, device="cuda", dtype=torch.float)
@@ -194,6 +199,7 @@ class FoundationPose:
         if self.glctx:
             self.glctx = dr.RasterizeCudaContext(s)
 
+    @torch.no_grad()
     def make_rotation_grid(self, min_n_views=40, inplane_step=60):
         cam_in_obs = sample_views_icosphere(n_views=min_n_views)
         rot_grid = []
@@ -207,6 +213,7 @@ class FoundationPose:
         self.rot_grid = torch.as_tensor(rot_grid, device="cuda", dtype=torch.float)
         rk_logger.info(f"self.rot_grid: {self.rot_grid.shape}")
 
+    @torch.no_grad()
     def generate_random_pose_hypo(self, K, depth, mask):
         ob_in_cams = self.rot_grid.clone()
         center = self.guess_translation(depth=depth, mask=mask, K=K)
@@ -250,11 +257,11 @@ class FoundationPose:
             rk_logger.info("valid too small, returning initial guess")
             pose = np.eye(4)
             pose[:3, 3] = self.guess_translation(depth_np, obj_mask, cam_intrinsics)
-            return pose
+            return torch.from_numpy(pose)[None].to("cuda")  # 1 x 4 x 4
 
         # full pipeline
         #xyz_map = depth2xyzmap(depth, K)
-        xyz_map = depth2xyzmap_batch(depth[None], torch.as_tensor(cam_intrinsics, device="cuda")[None], zfar=np.inf)[0]
+        xyz_map = depth2xyzmap_batch(depth[None], torch.from_numpy(cam_intrinsics)[None].to("cuda"), zfar=np.inf)[0]
         poses = self.generate_random_pose_hypo(K=cam_intrinsics, depth=depth_np, mask=obj_mask)
 
         if batch_size is None:

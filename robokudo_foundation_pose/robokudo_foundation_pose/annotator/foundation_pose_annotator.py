@@ -40,9 +40,10 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
             Attributes:
                 mesh_files:                  List of 3D/CAD model files to use.
-                mesh_obj_ids:                List of the cad model id corresponding to each file in 'mesh_file'
+                mesh_obj_ids:                List of the cad model ids corresponding to each file in 'mesh_file'
+                mesh_scale_factors           List of scaling factors to make each mesh corresponding to file in meter.
+                default_mesh_scale_factor:   Default scaling factor to make the mesh in meter.
                 name_to_obj_id               Dictionary for mapping the classname to the corresponding cad model id.
-                default_mesh_scale_factor:   Default mesh scaling factor to make the mesh in meter, if no 'units' are found.
 
                 cam_r_w2c:                   Row-wise 3 x 3 rotation matrix, rotation part of the world to camera frame mapping.
                 cam_t_w2c                    3 element translation vector, translation part of the world to camera frame mapping.
@@ -70,7 +71,8 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
             def __init__(self):
                 self.mesh_files: Optional[List[str]] = None
-                self.mesh_obj_ids: List[int] = None
+                self.mesh_obj_ids: Optional[List[int]] = None
+                self.mesh_scale_factors: Optional[List[float]] = None
                 self.default_mesh_scale_factor: float = 1.0
                 self.name_to_obj_id: Dict[str, int] = {}
 
@@ -111,8 +113,8 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         self.est = None
 
         # world in camera and inverse
-        self.cam_w2c = None
-        self.cam_c2w = None
+        self.tcw = None
+        self.twc = None
 
         # TODO remove after the 'double setup call' fix
         self.setup_guard = False
@@ -137,19 +139,24 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             self.setup_guard = True
             return True
 
-        #
-        mesh_files = self.descriptor.parameters.mesh_files
-        if mesh_files is None:
-            mesh_files = []
+        # check mesh files, their ids and scaling factors
+        mesh_files = self.descriptor.parameters.mesh_files or []
         num_meshes = len(mesh_files)
 
         mesh_obj_ids = self.descriptor.parameters.mesh_obj_ids
         if mesh_obj_ids is None:
             mesh_obj_ids = list(range(num_meshes))
 
+        assert all(obj_id >= 0 for obj_id in mesh_obj_ids), "Mesh object ids cannot be negative."
+        assert len(set(mesh_obj_ids)) == len(mesh_obj_ids), "Mesh object ids are not unique."
+        assert num_meshes == len(mesh_obj_ids), "Number of mesh files does not match number of ids"
+
         self.obj_id_to_index = {obj_id: i for i, obj_id in enumerate(mesh_obj_ids)}
 
-        assert num_meshes == len(mesh_obj_ids), "Number of mesh files does not match number of ids"
+        # use the given mesh scale factors or the default one, if missing
+        mesh_scale_factors = defaultdict(lambda: self.descriptor.parameters.default_mesh_scale_factor,
+                                         zip(list(range(num_meshes)),
+                                             self.descriptor.parameters.mesh_scale_factors or []))
 
         #  create 'FoundationPose'6d pose estimation model
         self.rk_logger.debug("Initializing model")
@@ -189,27 +196,13 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 mesh = mesh.dump(concatenate=True)
 
             # normalize mesh units to meters
-            unit = getattr(mesh, "units", None)
-            if unit in ("mm", "millimeter"):
-                # milimeter
-                mesh_scale_factor = 0.001
-            elif unit in ("cm", "centimeter"):
-                # centimeter
-                mesh_scale_factor = 0.01
-            elif unit in ["m", "meter"]:
-                # meter
-                mesh_scale_factor = 1.0
-            else:
-                # use default scaling factor
-                mesh_scale_factor = self.descriptor.parameters.default_mesh_scale_factor
-
-            mesh.apply_scale(mesh_scale_factor)
+            mesh.apply_scale(mesh_scale_factors[i])
 
             self.to_origin[i], self.extents[i] = trimesh.bounds.oriented_bounds(mesh)
 
             self.mesh_setting[i] = self.est.get_object_settings(mesh=mesh, symmetry_tfs=None)
 
-        # create optional camera to world frame mapping
+        # create optional camera to world frame and inverse transformation matrices
         cam_r_w2c = self.descriptor.parameters.cam_r_w2c
         if cam_r_w2c:
             cam_r_w2c = np.array(cam_r_w2c).reshape(3, 3)
@@ -221,15 +214,15 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         else:
             cam_t_w2c = np.zeros(3)
 
-        cam_w2c = np.eye(4, dtype=cam_r_w2c.dtype)
-        cam_w2c[:3, :3] = cam_r_w2c
-        cam_w2c[:3, 3] = cam_t_w2c
-        self.cam_w2c = cam_w2c  # 4 x 4
+        tcw = np.eye(4, dtype=cam_r_w2c.dtype)
+        tcw[:3, :3] = cam_r_w2c
+        tcw[:3, 3] = cam_t_w2c
+        self.tcw = tcw  # 4 x 4
 
-        cam_c2w = np.eye(4, dtype=cam_r_w2c.dtype)
-        cam_c2w[:3, :3] = cam_r_w2c.T
-        cam_c2w[:3, 3] = -np.dot(cam_r_w2c.T, cam_t_w2c)
-        self.cam_c2w = cam_c2w  # 4 x 4
+        twc = np.eye(4, dtype=cam_r_w2c.dtype)
+        twc[:3, :3] = cam_r_w2c.T
+        twc[:3, 3] = -np.dot(cam_r_w2c.T, cam_t_w2c)
+        self.twc = twc  # 4 x 4
 
         self.setup_guard = True
 
@@ -282,16 +275,17 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 # no classifications
                 continue
 
-            obj_id = best_classification.class_id or name_to_obj_id.get(best_classification.classname, None)
+            obj_id = best_classification.class_id
+            if obj_id is None:
+                # try to map class name to object id
+                obj_id = name_to_obj_id.get(best_classification.classname, None)
 
             if obj_id is None:
                 # unknown class
                 continue
 
-            # try to map object id to CAD model index
-            obj_index = self.obj_id_to_index.get(obj_id, None)
-
-            if obj_index is None:
+            # test if object id to CAD model index exists
+            if obj_id not in self.obj_id_to_index:
                 # no CAD model available
                 continue
 
@@ -444,42 +438,44 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 # process the (multiple) detection of the CAD model
                 if detection["poses"] is None:
                     # new object pose estimate
-                    poses = self.est.register(rgb=color, depth=depth, cam_intrinsics=cam_intrinsics_scaled,
-                                              obj_mask=detection["mask"], iteration=est_refine_iter,
-                                              num_pose_hypothesis=est_num_pose_hypothesis,
-                                              batch_size=est_batch_size)    # B x 4 x 4
+                    poses_tco = self.est.register(rgb=color, depth=depth, cam_intrinsics=cam_intrinsics_scaled,
+                                                  obj_mask=detection["mask"], iteration=est_refine_iter,
+                                                  num_pose_hypothesis=est_num_pose_hypothesis,
+                                                  batch_size=est_batch_size)    # B x 4 x 4
                     update_old_pose_annos = False
                 else:
                     # object tracking
-                    old_poses = detection["poses"]  # B x 4 x 4
+                    # current/old poses as object to world frame
+                    old_poses_two = detection["poses"]  # B x 4 x 4
 
                     # transform poses from world to camera frame
-                    old_poses = np.matmul(self.cam_w2c, old_poses)  # B x 4 x 4
+                    old_poses_tco = np.matmul(self.tcw, old_poses_two)  # B x 4 x 4
 
-                    old_poses = torch.from_numpy(old_poses).to(torch.float32).to(device="cuda")     # B x 4 x 4
+                    old_poses_tco = torch.from_numpy(old_poses_tco).to(torch.float32).to(device="cuda")     # B x 4 x 4
 
-                    poses = self.est.track_one(cam_intrinsics=cam_intrinsics_scaled, rgb=color, depth=depth,
-                                               poses=old_poses, iteration=track_refine_iter)    # B x 4 x 4
+                    poses_tco = self.est.track_one(cam_intrinsics=cam_intrinsics_scaled, rgb=color, depth=depth,
+                                                  poses=old_poses_tco, iteration=track_refine_iter)     # B x 4 x 4
                     update_old_pose_annos = update_old_pose_annotations
 
-                poses = poses.detach().cpu().numpy()    # B x 4 x 4
+                # new poses as object to camera frame
+                poses_tco = poses_tco.detach().cpu().numpy()    # B x 4 x 4
 
                 # transform poses from camera to world frame
-                poses = np.matmul(self.cam_c2w, poses)
+                poses_two = np.matmul(self.twc, poses_tco)      # B x 4 x 4
 
                 if update_old_pose_annos:
                     # update 'PoseAnnotation'
-                    self.update_pose_annotations(pose_annotations=detection["pose_annotations"], poses=poses)
+                    self.update_pose_annotations(pose_annotations=detection["pose_annotations"], poses=poses_two)
                 else:
                     # create new 'PoseAnnotation'
-                    self.create_pose_annotations(object_hypothesis=detection["object_hypothesis"], poses=poses)
+                    self.create_pose_annotations(object_hypothesis=detection["object_hypothesis"], poses=poses_two)
 
                 if self.descriptor.parameters.global_with_visualization:
                     # first pose is the best one
-                    pose = poses[0]  # 4 x 4
+                    obj_in_cam = poses_tco[0]  # 4 x 4
 
                     # draw the 2D bounding box and coordinate axis as 2D overlay
-                    center_pose = np.matmul(pose, np.linalg.inv(self.to_origin[mesh_index]))
+                    center_pose = np.matmul(obj_in_cam, np.linalg.inv(self.to_origin[mesh_index]))
 
                     extents = self.extents[mesh_index]  # 3
                     bbox = np.stack([-extents / 2, extents / 2], axis=0)    # 2 x 3

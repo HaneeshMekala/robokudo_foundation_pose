@@ -41,7 +41,7 @@ class AnalysisEngine(robokudo.analysis_engine.AnalysisEngineInterface):
          in the ROS2 "2025-01-09-11-12-19-YCB-drill-cheezit-mustard-masterchef-domino-tomatosoup.bag" file.
         """
         pkg_dir = get_pkg_share_dir("robokudo_cad_data")
-        obj_path = osp.join(pkg_dir, "meshes", "003_cracker_box", "textured.obj")
+        obj_path = osp.join(pkg_dir, "meshes", "cracker_box", "textured.obj")
 
         kinect_camera_config = robokudo.descriptors.camera_configs.config_kinect_robot_wo_transform.CameraConfig()
         kinect_config = CollectionReaderAnnotator.Descriptor(

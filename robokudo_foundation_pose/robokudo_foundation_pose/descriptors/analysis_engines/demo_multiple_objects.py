@@ -34,7 +34,7 @@ def get_pkg_share_dir(ros_pkg_name: str) -> str:
 object_hypothesis_config_mustard = {
         "name": "mustard",
         "class_id": 0,
-        "object_path": ["meshes", "mustard", "textured_simple.obj"],
+        "object_path": ["meshes", "mustard", "textured.obj"],
         "bbox": [500, 489, 103, 174],   # xywh
         "mask": {"counts": [480555, 9, 947, 19, 937, 27, 931, 31, 926, 36, 922, 41, 38, 20, 859, 47, 27, 32, 853, 51,
                             18, 42, 847, 56, 10, 48, 844, 116, 843, 118, 840, 121, 838, 123, 836, 125, 834, 126, 833,
@@ -54,7 +54,7 @@ object_hypothesis_config_mustard = {
 object_hypothesis_config_cracker_box = {
     "name": "cracker_box",
     "class_id": 3,
-    "object_path": ["meshes", "003_cracker_box", "textured.obj"],
+    "object_path": ["meshes", "cracker_box", "textured.obj"],
     "bbox": [355, 310, 168, 183],
     "mask": {"counts": [341140, 9, 945, 20, 936, 29, 928, 36, 919, 46, 911, 52, 905, 63, 895, 68, 892, 72, 887, 77,
                         883, 81, 878, 87, 873, 92, 868, 96, 864, 100, 860, 105, 855, 109, 851, 114, 846, 118, 842,
@@ -80,7 +80,7 @@ object_hypothesis_config_cracker_box = {
 object_hypothesis_config_sugar_box = {
     "name": "sugar_box",
     "class_id": 4,
-    "object_path": ["meshes", "004_sugar_box", "textured.obj"],
+    "object_path": ["meshes", "sugar_box", "textured.obj"],
     "bbox": [815, 491, 129, 168],
     "mask": {"counts": [783028, 15, 939, 25, 931, 30, 927, 34, 923, 37, 920, 41, 914, 46, 905, 55, 902, 58, 897, 63,
                         887, 74, 875, 85, 868, 92, 864, 96, 855, 105, 850, 110, 845, 115, 838, 122, 831, 129, 827,
@@ -102,7 +102,7 @@ object_hypothesis_config_sugar_box = {
 object_hypothesis_config_tomato_soup_can = {
     "name": "tomato_soup_can",
     "class_id": 5,
-    "object_path": ["meshes", "005_tomato_soup_can", "textured.obj"],
+    "object_path": ["meshes", "tomato_soup_can", "textured.obj"],
     "bbox": [954, 497, 191, 114],
     "mask": {"counts": [916420, 8, 948, 15, 942, 20, 937, 24, 934, 27, 930, 31, 925, 37, 919, 42, 913, 48, 907, 53,
                         903, 58, 899, 62, 894, 67, 889, 71, 886, 75, 881, 79, 877, 84, 872, 88, 867, 94, 863, 97,

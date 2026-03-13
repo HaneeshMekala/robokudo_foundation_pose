@@ -21,15 +21,19 @@ from robokudo.cas import CASViews
 from robokudo.types.annotation import Classification, PoseAnnotation
 from robokudo.types.scene import ObjectHypothesis
 from robokudo.utils.decorators import timer_decorator
-from robokudo.utils import cv_helper, transform
-
-
+from robokudo.utils import cv_helper
 
 from robokudo_foundation_pose.Utils import depth2xyzmap, toOpen3dCloud
 from robokudo_foundation_pose.Utils import draw_posed_3d_box, draw_xyz_axis, glcam_in_cvcam
 from robokudo_foundation_pose.estimater import FoundationPose, ScorePredictor, PoseRefinePredictor
 
 from typing_extensions import Optional, List, Union, Dict, Any, Tuple
+
+# changes orientation to be CRAM conform with x-axis is left, y-axis is backwards and z-axis is up.
+cram_to_obj = np.array([[1, 0, 0, 0],
+                        [0, 0, 1, 0],
+                        [0, -1, 0, 0],
+                        [0, 0, 0, 1]], dtype=np.float32)    # 4 x 4
 
 
 class FoundationPoseAnnotator(core.ThreadedAnnotator):
@@ -39,8 +43,8 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             This class contains all parameters that are necessary for the FoundationPoseAnnotator 6D pose estimator and tracker.
 
             Attributes:
-                mesh_files:                  List of 3D/CAD model files to use.
-                mesh_obj_ids:                List of the cad model ids corresponding to each file in 'mesh_file'
+                mesh_files:                  List of 3D/CAD mesh model files to use.
+                mesh_obj_ids:                List of the CAD mesh model ids corresponding to each file in 'mesh_file'
                 mesh_scale_factors           List of scaling factors to make each mesh corresponding to file in meter.
                 default_mesh_scale_factor:   Default scaling factor to make the mesh in meter.
                 name_to_obj_id               Dictionary for mapping the classname to the corresponding cad model id.
@@ -65,8 +69,13 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 debug:                       Should generated debug information, which are stored in the 'debug_dir' dir.
                 debug_dir:                   Directory to store debug information.
 
-                weights_ros_pkg_name:        Name of the ROS2 package containing the model weights.
                 use_cuda:                    If 'True', the inference will use CUDA instead of the CPU.
+
+                use_cram_visual_axis        If 'True', the axis visualisations will be aligned to the 3D mesh in CRAM
+                                            orientation, otherwise they will be aligned to the orientated mesh bounding box.
+                enforce_visual_axis_center  If 'True' the axis visualisations will be in the center of the orientated mesh
+                                            bounding box but orientation is still dependent on 'use_cram_visual_axis',
+                                            otherwise they dependent on mesh origin.
             """
 
             def __init__(self):
@@ -91,7 +100,9 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 self.debug_dir: Optional[str] = None
 
                 self.use_cuda: bool = True
-                self.weights_ros_pkg_name: str = "robokudo_foundation_pose"
+
+                self.use_cram_visual_axis: bool = True
+                self.enforce_visual_axis_center: bool = False
         parameters = Parameters()
 
     def __init__(self, name="FoundationPoseAnnotator", descriptor=Descriptor()):
@@ -105,7 +116,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
         # mesh data
         self.obj_id_to_index = None
-        self.to_origin = None
+        self.from_origin = None
         self.extents = None
         self.mesh_setting = None
 
@@ -183,7 +194,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         # load all CAD models
         self.rk_logger.debug("Load and preprocess all CAD models")
 
-        self.to_origin = [None] * len(mesh_obj_ids)
+        self.from_origin = [None] * len(mesh_obj_ids)
         self.extents = [None] * len(mesh_obj_ids)
         self.mesh_setting = [None] * len(mesh_obj_ids)
 
@@ -198,7 +209,8 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             # normalize mesh units to meters
             mesh.apply_scale(mesh_scale_factors[i])
 
-            self.to_origin[i], self.extents[i] = trimesh.bounds.oriented_bounds(mesh)
+            to_origin, self.extents[i] = trimesh.bounds.oriented_bounds(mesh)   # 4 x 4, 3
+            self.from_origin[i] = np.linalg.inv(to_origin)  # 4 x 4
 
             self.mesh_setting[i] = self.est.get_object_settings(mesh=mesh, symmetry_tfs=None)
 
@@ -214,14 +226,14 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         else:
             cam_t_w2c = np.zeros(3)
 
-        tcw = np.eye(4, dtype=cam_r_w2c.dtype)
-        tcw[:3, :3] = cam_r_w2c
-        tcw[:3, 3] = cam_t_w2c
+        tcw = np.eye(4, dtype=cam_r_w2c.dtype)  # 4 x 4
+        tcw[:3, :3] = cam_r_w2c     # 3 x 3
+        tcw[:3, 3] = cam_t_w2c      # 3
         self.tcw = tcw  # 4 x 4
 
-        twc = np.eye(4, dtype=cam_r_w2c.dtype)
-        twc[:3, :3] = cam_r_w2c.T
-        twc[:3, 3] = -np.dot(cam_r_w2c.T, cam_t_w2c)
+        twc = np.eye(4, dtype=cam_r_w2c.dtype)  # 4 x 4
+        twc[:3, :3] = cam_r_w2c.T   # 3 x 3
+        twc[:3, 3] = -np.dot(cam_r_w2c.T, cam_t_w2c)    # 3
         self.twc = twc  # 4 x 4
 
         self.setup_guard = True
@@ -363,27 +375,6 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             pose_anno.translation = translation_vector.tolist()
             pose_anno.source = "FoundationPoseTracking"
 
-    @staticmethod
-    def make_3d_visualization(ob_in_cam: np.ndarray, extents: np.ndarray, size: float = 0.2,
-                              obj_name: Optional[str] = None) -> None:
-        geoms = []
-
-        # bounding box
-        obb = o3d.geometry.OrientedBoundingBox(
-            center=ob_in_cam[:3, 3],
-            R=ob_in_cam[:3, :3],
-            extent=extents
-        )
-        obb.color = [0.0, 1.0, 0.0]
-        geoms.append({"name": obj_name + "_3d_bbox", "geometry": obb})
-
-        # coordinate axis
-        mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=size)
-        mesh.transform(ob_in_cam)
-        geoms.append({"name": obj_name + "_axis", "geometry": mesh})
-
-        return geoms
-
     #@timer_decorator
     def compute(self):
         if not (self.with_estimation or self.with_tracking):
@@ -454,7 +445,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                     old_poses_tco = torch.from_numpy(old_poses_tco).to(torch.float32).to(device="cuda")     # B x 4 x 4
 
                     poses_tco = self.est.track_one(cam_intrinsics=cam_intrinsics_scaled, rgb=color, depth=depth,
-                                                  poses=old_poses_tco, iteration=track_refine_iter)     # B x 4 x 4
+                                                   poses=old_poses_tco, iteration=track_refine_iter)    # B x 4 x 4
                     update_old_pose_annos = update_old_pose_annotations
 
                 # new poses as object to camera frame
@@ -474,21 +465,44 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                     # first pose is the best one
                     obj_in_cam = poses_tco[0]  # 4 x 4
 
-                    # draw the 2D bounding box and coordinate axis as 2D overlay
-                    center_pose = np.matmul(obj_in_cam, np.linalg.inv(self.to_origin[mesh_index]))
+                    from_origin = self.from_origin[mesh_index]          # 4 x 4
+                    center_pose = np.matmul(obj_in_cam, from_origin)    # 4 x 4
 
+                    if self.descriptor.parameters.use_cram_visual_axis:
+                        # change axis orientation to be visual CRAM conform
+                        if self.descriptor.parameters.enforce_visual_axis_center:
+                            # enforce centered in oriented mesh bounding box
+                            translation_from_orig = np.eye(4)                           # 4 x 4
+                            translation_from_orig[:3, 3] = from_origin[:3, 3]           # 3
+                            obj_in_cam = np.matmul(obj_in_cam, translation_from_orig)   # 4 x 4
+
+                        obj_axis_pose = np.matmul(obj_in_cam, cram_to_obj)      # 4 x 4
+                    else:
+                        # align 3D axis with the oriented mesh bounding box
+                        obj_axis_pose = center_pose     # 4 x 4
+
+                    # draw the 2D bounding box and coordinate axis as 2D overlay
                     extents = self.extents[mesh_index]  # 3
                     bbox = np.stack([-extents / 2, extents / 2], axis=0)    # 2 x 3
 
                     vis2d = draw_posed_3d_box(K=cam_intrinsics_scaled, img=vis2d, ob_in_cam=center_pose,
                                               bbox=bbox, line_color=(0, 255, 0), linewidth=2)
-                    vis2d = draw_xyz_axis(color=vis2d, ob_in_cam=center_pose, scale=0.1, K=cam_intrinsics_scaled,
+                    vis2d = draw_xyz_axis(color=vis2d, ob_in_cam=obj_axis_pose, scale=0.1, K=cam_intrinsics_scaled,
                                           thickness=3, transparency=0, is_input_rgb=False)
 
                     # draw the 3D bounding box and coordinate axis
-                    geoms.extend(self.make_3d_visualization(ob_in_cam=center_pose,
-                                                            extents=extents,
-                                                            obj_name="object_id_{}".format(obj_id)))
+                    obb = o3d.geometry.OrientedBoundingBox(
+                        center=center_pose[:3, 3],
+                        R=center_pose[:3, :3],
+                        extent=extents
+                    )
+                    obb.color = (0.0, 1.0, 0.0)     # green
+                    geoms.append({"name": "object_id_{}_3d_bbox".format(obj_id), "geometry": obb})
+
+                    # coordinate axis
+                    mesh = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
+                    mesh.transform(obj_axis_pose)
+                    geoms.append({"name": "object_id_{}_axis".format(obj_id), "geometry": mesh})
 
         if self.descriptor.parameters.global_with_visualization:
             if self.descriptor.parameters.global_with_depth:

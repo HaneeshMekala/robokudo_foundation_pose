@@ -44,7 +44,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
             Attributes:
                 mesh_files:                  List of 3D/CAD mesh model files to use.
-                mesh_obj_ids:                List of the CAD mesh model ids corresponding to each file in 'mesh_file'
+                mesh_obj_ids:                List of the object ids corresponding to each file in 'mesh_file'
                 mesh_scale_factors           List of scaling factors to make each mesh corresponding to file in meter.
                 default_mesh_scale_factor:   Default scaling factor to make the mesh in meter.
                 name_to_obj_id               Dictionary for mapping the classname to the corresponding cad model id.
@@ -96,7 +96,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
                 self.update_old_pose_annotations: bool = False
 
-                self.debug: bool = True
+                self.debug: bool = False
                 self.debug_dir: Optional[str] = None
 
                 self.use_cuda: bool = True
@@ -116,7 +116,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
         # mesh data
         self.obj_id_to_index = None
-        self.from_origin = None
+        self.origin_in_obj = None
         self.extents = None
         self.mesh_setting = None
 
@@ -194,7 +194,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         # load all CAD models
         self.rk_logger.debug("Load and preprocess all CAD models")
 
-        self.from_origin = [None] * len(mesh_obj_ids)
+        self.origin_in_obj = [None] * len(mesh_obj_ids)
         self.extents = [None] * len(mesh_obj_ids)
         self.mesh_setting = [None] * len(mesh_obj_ids)
 
@@ -209,8 +209,12 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             # normalize mesh units to meters
             mesh.apply_scale(mesh_scale_factors[i])
 
-            to_origin, self.extents[i] = trimesh.bounds.oriented_bounds(mesh)   # 4 x 4, 3
-            self.from_origin[i] = np.linalg.inv(to_origin)  # 4 x 4
+            # determine the oriented bound box and a transformation from the object to this box frame
+            obj_in_origin, self.extents[i] = trimesh.bounds.oriented_bounds(mesh)           # 4 x 4, 3
+            origin_in_obj = np.eye(4, dtype=obj_in_origin.dtype)                         # 4 x 4
+            origin_in_obj[:3, :3] = obj_in_origin[:3, :3].T                                 # 3 x 3
+            origin_in_obj[:3, 3] = -np.dot(origin_in_obj[:3, :3], obj_in_origin[:3, 3])     # 3
+            self.origin_in_obj[i] = origin_in_obj                                           # 4 x 4
 
             self.mesh_setting[i] = self.est.get_object_settings(mesh=mesh, symmetry_tfs=None)
 
@@ -465,15 +469,15 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                     # first pose is the best one
                     obj_in_cam = poses_tco[0]  # 4 x 4
 
-                    from_origin = self.from_origin[mesh_index]          # 4 x 4
-                    center_pose = np.matmul(obj_in_cam, from_origin)    # 4 x 4
+                    origin_in_obj = self.origin_in_obj[mesh_index]      # 4 x 4
+                    center_pose = np.matmul(obj_in_cam, origin_in_obj)  # 4 x 4
 
                     if self.descriptor.parameters.use_cram_visual_axis:
                         # change axis orientation to be visual CRAM conform
                         if self.descriptor.parameters.enforce_visual_axis_center:
                             # enforce centered in oriented mesh bounding box
                             translation_from_orig = np.eye(4)                           # 4 x 4
-                            translation_from_orig[:3, 3] = from_origin[:3, 3]           # 3
+                            translation_from_orig[:3, 3] = origin_in_obj[:3, 3]         # 3
                             obj_in_cam = np.matmul(obj_in_cam, translation_from_orig)   # 4 x 4
 
                         obj_axis_pose = np.matmul(obj_in_cam, cram_to_obj)      # 4 x 4

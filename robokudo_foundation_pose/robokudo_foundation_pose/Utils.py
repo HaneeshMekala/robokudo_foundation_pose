@@ -53,6 +53,7 @@ glcam_in_cvcam = np.array([[1,0,0,0],
                            [0,0,0,1]]).astype(float)
 
 
+@torch.no_grad()
 def make_mesh_tensors(mesh, device="cuda", max_tex_size=None):
     mesh_tensors = {}
 
@@ -84,6 +85,7 @@ def make_mesh_tensors(mesh, device="cuda", max_tex_size=None):
     return mesh_tensors
 
 
+@torch.no_grad()
 def nvdiffrast_render(K=None, H=None, W=None, ob_in_cams=None, glctx=None, context="cuda", get_normal=False, mesh_tensors=None, mesh=None, projection_mat=None, bbox2d=None, output_size=None, use_light=False, light_color=None, light_dir=np.array([0,0,1]), light_pos=np.array([0,0,0]), w_ambient=0.8, w_diffuse=0.5, extra={}):
     """Just plain rendering, not support any gradient
     @K: (3,3) np array

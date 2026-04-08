@@ -7,13 +7,16 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import os
+import gc
+
 import numpy as np
+import cv2
+import imageio
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import cv2
-import imageio
-import matplotlib.pyplot as plt
+
 from .Utils import (
     erode_depth,
     bilateral_filter_depth,
@@ -290,7 +293,9 @@ class FoundationPose:
             refined_poses[i] = batched_refined_poses
 
             # clean up cache
+            del pose_batch
             torch.cuda.empty_cache()
+            gc.collect()
 
             if vis_ref is not None:
                 imageio.imwrite(f"{self.debug_dir}/vis_refiner.png", vis_ref)
@@ -314,6 +319,7 @@ class FoundationPose:
 
             # clean up cache
             torch.cuda.empty_cache()
+            gc.collect()
 
         refined_poses = torch.cat(refined_poses, dim=0)     # B x 4 x 4
         scores = torch.cat(scores, dim=0)                   # B
@@ -371,6 +377,7 @@ class FoundationPose:
 
         # clean up cache
         torch.cuda.empty_cache()
+        gc.collect()
 
         if poses.shape[0] > 1 and sort_by_score:
             # sort refined poses by score
@@ -392,6 +399,7 @@ class FoundationPose:
 
             # clean up cache
             torch.cuda.empty_cache()
+            gc.collect()
 
             sort_indices = torch.argsort(scores, stable=False, dim=0, descending=True)
             refined_poses = refined_poses[sort_indices]

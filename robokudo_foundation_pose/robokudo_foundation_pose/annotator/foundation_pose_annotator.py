@@ -5,6 +5,7 @@ import numpy as np
 import open3d as o3d
 import py_trees
 import rclpy
+import gc
 
 from collections import defaultdict
 
@@ -452,8 +453,14 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                                                    poses=old_poses_tco, iteration=track_refine_iter)    # B x 4 x 4
                     update_old_pose_annos = update_old_pose_annotations
 
+                    del old_poses_tco
+
                 # new poses as object to camera frame
                 poses_tco = poses_tco.detach().cpu().numpy()    # B x 4 x 4
+
+                # clean up cache
+                torch.cuda.empty_cache()
+                gc.collect()
 
                 # transform poses from camera to world frame
                 poses_two = np.matmul(self.twc, poses_tco)      # B x 4 x 4

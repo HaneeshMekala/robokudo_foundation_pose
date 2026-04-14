@@ -44,7 +44,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             This class contains all parameters that are necessary for the FoundationPoseAnnotator 6D pose estimator and tracker.
 
             Attributes:
-                mesh_files:                  List of 3D/CAD mesh model files to use.
+                mesh_files:                  List of 3D mesh/CAD model files to use.
                 mesh_obj_ids:                List of the object ids corresponding to each file in 'mesh_file'
                 mesh_scale_factors           List of scaling factors to make each mesh corresponding to file in meter.
                 default_mesh_scale_factor:   Default scaling factor to make the mesh in meter.
@@ -116,10 +116,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         self.always_new = False
 
         # mesh data
-        self.obj_id_to_index = None
-        self.origin_in_obj = None
-        self.extents = None
-        self.mesh_setting = None
+        self.obj_id_to_mesh_data = None
 
         # pose estimator
         self.est = None
@@ -163,8 +160,6 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         assert len(set(mesh_obj_ids)) == len(mesh_obj_ids), "Mesh object ids are not unique."
         assert num_meshes == len(mesh_obj_ids), "Number of mesh files does not match number of ids"
 
-        self.obj_id_to_index = {obj_id: i for i, obj_id in enumerate(mesh_obj_ids)}
-
         # use the given mesh scale factors or the default one, if missing
         mesh_scale_factors = defaultdict(lambda: self.descriptor.parameters.default_mesh_scale_factor,
                                          zip(list(range(num_meshes)),
@@ -195,11 +190,9 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         # load all CAD models
         self.rk_logger.debug("Load and preprocess all CAD models")
 
-        self.origin_in_obj = [None] * len(mesh_obj_ids)
-        self.extents = [None] * len(mesh_obj_ids)
-        self.mesh_setting = [None] * len(mesh_obj_ids)
+        self.obj_id_to_mesh_data = {}
 
-        for i, mesh_file in enumerate(mesh_files):
+        for i, (mesh_obj_id, mesh_file) in enumerate(zip(mesh_obj_ids, mesh_files)):
             # load mesh
             mesh = trimesh.load(mesh_file)
 
@@ -211,13 +204,14 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
             mesh.apply_scale(mesh_scale_factors[i])
 
             # determine the oriented bound box and a transformation from the object to this box frame
-            obj_in_origin, self.extents[i] = trimesh.bounds.oriented_bounds(mesh)           # 4 x 4, 3
+            obj_in_origin, extents = trimesh.bounds.oriented_bounds(mesh)                   # 4 x 4, 3
             origin_in_obj = np.eye(4, dtype=obj_in_origin.dtype)                         # 4 x 4
             origin_in_obj[:3, :3] = obj_in_origin[:3, :3].T                                 # 3 x 3
             origin_in_obj[:3, 3] = -np.dot(origin_in_obj[:3, :3], obj_in_origin[:3, 3])     # 3
-            self.origin_in_obj[i] = origin_in_obj                                           # 4 x 4
 
-            self.mesh_setting[i] = self.est.get_object_settings(mesh=mesh, symmetry_tfs=None)
+            mesh_setting = self.est.get_object_settings(mesh=mesh, symmetry_tfs=None)
+
+            self.obj_id_to_mesh_data[mesh_obj_id] = (mesh_setting, origin_in_obj, extents)  # dict, 4 x 4, 3
 
         # create optional camera to world frame and inverse transformation matrices
         cam_r_w2c = self.descriptor.parameters.cam_r_w2c
@@ -293,18 +287,14 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 continue
 
             obj_id = best_classification.class_id
-            if obj_id is None:
+
+            if obj_id is None or obj_id not in self.obj_id_to_mesh_data:
                 # try to map class name to object id
                 obj_id = name_to_obj_id.get(best_classification.classname, None)
 
-            if obj_id is None:
-                # unknown class
-                continue
-
-            # test if object id to CAD model index exists
-            if obj_id not in self.obj_id_to_index:
-                # no CAD model available
-                continue
+                if obj_id is None or obj_id not in self.obj_id_to_mesh_data:
+                    # unknown class or no CAD model available
+                    continue
 
             # search for 'PoseAnnotation'
             pose_annos = [obj_anno for obj_anno in obj_hypo.annotations if isinstance(obj_anno, PoseAnnotation)]
@@ -425,10 +415,10 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                 # nothing for that CAD model to do
                 continue
 
-            mesh_index = self.obj_id_to_index[obj_id]
+            mesh_setting, origin_in_obj, extents = self.obj_id_to_mesh_data[obj_id]     # dict, 4 x 4, 3
 
             # set Foundation to the current CAD model
-            self.est.reset_object_with_settings(self.mesh_setting[mesh_index])
+            self.est.reset_object_with_settings(mesh_setting)
 
             for detection in detections:
                 # process the (multiple) detection of the CAD model
@@ -476,7 +466,6 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                     # first pose is the best one
                     obj_in_cam = poses_tco[0]  # 4 x 4
 
-                    origin_in_obj = self.origin_in_obj[mesh_index]      # 4 x 4
                     center_pose = np.matmul(obj_in_cam, origin_in_obj)  # 4 x 4
 
                     if self.descriptor.parameters.use_cram_visual_axis:
@@ -493,7 +482,6 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                         obj_axis_pose = center_pose     # 4 x 4
 
                     # draw the 2D bounding box and coordinate axis as 2D overlay
-                    extents = self.extents[mesh_index]  # 3
                     bbox = np.stack([-extents / 2, extents / 2], axis=0)    # 2 x 3
 
                     vis2d = draw_posed_3d_box(K=cam_intrinsics_scaled, img=vis2d, ob_in_cam=center_pose,

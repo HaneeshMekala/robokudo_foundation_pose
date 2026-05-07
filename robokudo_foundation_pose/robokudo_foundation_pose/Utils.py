@@ -593,7 +593,7 @@ def compute_crop_window_tf_batch(pts=None, H=None, W=None, poses=None, K=None,
 
         # project: (B*M,3) @ (3,3)^T -> (B*M,3)
         projected = (pts.reshape(-1, 3) @ K.T)
-        uvs = projected[:, :2] / projected[:, 2:3]
+        uvs = projected[:, :2] / (projected[:, 2:] + 1.0e-6)    # prevent dividing by zero
         uvs = uvs.reshape(B, -1, 2)
 
         center = uvs[:, 0]  # (B,2)
@@ -648,8 +648,8 @@ def trimesh_add_pure_colored_texture(mesh, color=np.array([255,255,255]), resolu
 def project_3d_to_2d(pt, K, ob_in_cam):
     P = K @ ob_in_cam[:3, :]    # full 3x4 projection matrix
     projected = P @ pt.reshape(4, 1)
-    projected = projected / projected[2]
-    return projected[:2].round().astype(int).reshape(-1)
+    projected = projected[:2] / (projected[2:] + 1.0e-6)    # prevent diving by zero
+    return projected.round().astype(int).reshape(-1)
 
 
 def draw_xyz_axis(color, ob_in_cam, scale=0.1, K=np.eye(3), thickness=3, transparency=0, is_input_rgb=False):
@@ -657,17 +657,17 @@ def draw_xyz_axis(color, ob_in_cam, scale=0.1, K=np.eye(3), thickness=3, transpa
     @color: BGR
     """
     if is_input_rgb:
-        color = cv2.cvtColor(color,cv2.COLOR_RGB2BGR)
+        color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
     xx = np.array([1, 0, 0, 1]).astype(float)
     yy = np.array([0, 1, 0, 1]).astype(float)
     zz = np.array([0, 0, 1, 1]).astype(float)
     xx[:3] = xx[:3]*scale
     yy[:3] = yy[:3]*scale
     zz[:3] = zz[:3]*scale
-    origin = tuple(project_3d_to_2d(np.array([0, 0, 0, 1]), K, ob_in_cam))
-    xx = tuple(project_3d_to_2d(xx, K, ob_in_cam))
-    yy = tuple(project_3d_to_2d(yy, K, ob_in_cam))
-    zz = tuple(project_3d_to_2d(zz, K, ob_in_cam))
+    origin = tuple(np.maximum(project_3d_to_2d(np.array([0, 0, 0, 1]), K, ob_in_cam), 0))
+    xx = tuple(np.maximum(project_3d_to_2d(xx, K, ob_in_cam), 0))
+    yy = tuple(np.maximum(project_3d_to_2d(yy, K, ob_in_cam), 0))
+    zz = tuple(np.maximum(project_3d_to_2d(zz, K, ob_in_cam), 0))
     line_type = cv2.LINE_AA
     arrow_len = 0
     tmp = color.copy()
@@ -690,7 +690,7 @@ def draw_xyz_axis(color, ob_in_cam, scale=0.1, K=np.eye(3), thickness=3, transpa
     return tmp
 
 
-def draw_posed_3d_box(K, img, ob_in_cam, bbox, line_color=(0,255,0), linewidth=2):
+def draw_posed_3d_box(K, img, ob_in_cam, bbox, line_color=(0, 255, 0), linewidth=2):
     """Revised from 6pack dataset/inference_dataset_nocs.py::projection
     @bbox: (2,3) min/max
     @line_color: RGB
@@ -700,11 +700,12 @@ def draw_posed_3d_box(K, img, ob_in_cam, bbox, line_color=(0,255,0), linewidth=2
     max_xyz = bbox.max(axis=0)
     xmax, ymax, zmax = max_xyz
 
-    def draw_line3d(start,end,img):
-        pts = np.stack((start,end),axis=0).reshape(-1, 3)
-        pts = (ob_in_cam@to_homo(pts).T).T[:, :3]    # (2,3)
-        projected = (K@pts.T).T
-        uv = np.round(projected[:, :2]/projected[:, 2].reshape(-1, 1)).astype(int)	    # (2,2)
+    def draw_line3d(start, end, img):
+        pts = np.stack((start, end), axis=0).reshape(-1, 3)     # 2 x 3
+        pts = (ob_in_cam @ to_homo(pts).T).T[:, :3]     # 2 x 3
+        projected = (K @ pts.T).T   # 2 x 3
+        uv = np.round(projected[:, :2] / (projected[:, 2:] + 1.0e-6)).astype(int)   # 2 x 2, prevent dividing by zero
+        uv = np.maximum(uv, 0)  # 2 x 2, prevent negative values
         img = cv2.line(img, uv[0].tolist(), uv[1].tolist(), color=line_color, thickness=linewidth, lineType=cv2.LINE_AA)
         return img
 

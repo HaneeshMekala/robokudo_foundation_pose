@@ -30,12 +30,6 @@ from robokudo_foundation_pose.estimater import FoundationPose, ScorePredictor, P
 
 from typing_extensions import Optional, List, Union, Dict, Any, Tuple
 
-# changes orientation to be CRAM conform with x-axis is left, y-axis is backwards and z-axis is up.
-cram_to_obj = np.array([[1, 0, 0, 0],
-                        [0, 0, 1, 0],
-                        [0, -1, 0, 0],
-                        [0, 0, 0, 1]], dtype=np.float32)    # 4 x 4
-
 
 class FoundationPoseAnnotator(core.ThreadedAnnotator):
     class Descriptor(core.ThreadedAnnotator.Descriptor):
@@ -469,14 +463,15 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
                     center_pose = np.matmul(obj_in_cam, origin_in_obj)  # 4 x 4
 
                     if self.descriptor.parameters.use_cram_visual_axis:
-                        # change axis orientation to be visual CRAM conform
+                        # align 3D axis to be visual CRAM conform
+                        # with x-axis is left, y-axis is backwards and z-axis is up
                         if self.descriptor.parameters.enforce_visual_axis_center:
                             # enforce centered in oriented mesh bounding box
                             translation_from_orig = np.eye(4)                           # 4 x 4
                             translation_from_orig[:3, 3] = origin_in_obj[:3, 3]         # 3
                             obj_in_cam = np.matmul(obj_in_cam, translation_from_orig)   # 4 x 4
 
-                        obj_axis_pose = np.matmul(obj_in_cam, cram_to_obj)      # 4 x 4
+                        obj_axis_pose = obj_in_cam      # 4 x 4
                     else:
                         # align 3D axis with the oriented mesh bounding box
                         obj_axis_pose = center_pose     # 4 x 4

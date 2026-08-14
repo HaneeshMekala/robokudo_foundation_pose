@@ -42,7 +42,7 @@ pip3 install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url http
 Install all remaining packages by executing the following commands:
 
 ```
-pip3 install numpy trimesh open3d scipy opencv-python imageio omegaconf transformations
+pip3 install numpy trimesh open3d scipy opencv-python imageio omegaconf
 pip3 install kornia h5py warp-lang
 pip3 install --no-build-isolation --no-cache-dir git+https://github.com/NVlabs/nvdiffrast.git
 pip3 install --no-build-isolation --no-cache-dir "git+https://github.com/facebookresearch/pytorch3d.git@stable"

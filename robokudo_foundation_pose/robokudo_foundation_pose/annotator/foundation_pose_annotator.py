@@ -9,10 +9,9 @@ import gc
 
 from collections import defaultdict
 
-import transformations as tr
-
-import torch
+from scipy.spatial.transform import Rotation
 import trimesh
+import torch
 import nvdiffrast.torch as dr
 
 # Robokudo framework
@@ -301,7 +300,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
 
                 poses = np.tile(np.eye(4, dtype=np.float32)[None, ...], (len(pose_annos), 1, 1))    # B x 4 x 4
                 for i, pose_anno in enumerate(pose_annos):
-                    poses[i, :3, :3] = tr.quaternion_matrix(pose_anno.rotation)[:3, :3]     # 3 x 3
+                    poses[i, :3, :3] = Rotation.from_quat(pose_anno.rotation).as_matrix()   # 3 x 3
                     poses[i, :3, 3] = np.array(pose_anno.translation)   # 3
 
                 full_mask = None
@@ -339,7 +338,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         :param np.ndarray poses: [K, 4, 4]
         """
         for pose in poses:
-            quaternion = tr.quaternion_from_matrix(pose)    # 4 xyzw
+            quaternion = Rotation.from_matrix(pose[:3, :3]).as_quat(canonical=True)     # 4 (xyzw)
             translation_vector = pose[:3, 3]                # 3
 
             pose_anno = PoseAnnotation()
@@ -357,7 +356,7 @@ class FoundationPoseAnnotator(core.ThreadedAnnotator):
         :param np.ndarray poses: [B, 4, 4]
         """
         for pose_anno, pose in zip(pose_annotations, poses):
-            quaternion = tr.quaternion_from_matrix(pose)    # 4 xyzw
+            quaternion = Rotation.from_matrix(pose[:3, :3]).as_quat(canonical=True)     # 4 (xyzw)
             translation_vector = pose[:3, 3]                # 3
 
             pose_anno.rotation = quaternion.tolist()

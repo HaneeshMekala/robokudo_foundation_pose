@@ -38,7 +38,7 @@ class AnalysisEngine(robokudo.analysis_engine.AnalysisEngineInterface):
     def implementation(self):
         """
         Create a basic pipeline that estimates the 6D pose estimation for cracker box object visible
-         in the ROS2 "2025-01-09-11-12-19-YCB-drill-cheezit-mustard-masterchef-domino-tomatosoup.bag" file.
+        in the ROS2 "2025-01-09-11-12-19-YCB-drill-cheezit-mustard-masterchef-domino-tomatosoup.bag" file.
         """
         pkg_dir = get_pkg_share_dir("robokudo_cad_data")
         obj_path = osp.join(pkg_dir, "meshes", "cracker_box", "textured.obj")

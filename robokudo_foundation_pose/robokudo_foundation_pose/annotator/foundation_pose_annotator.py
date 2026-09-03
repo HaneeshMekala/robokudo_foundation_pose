@@ -5,6 +5,7 @@ import numpy as np
 import open3d as o3d
 import py_trees
 import rclpy
+import rclpy.node  # 'setup()' annotates a parameter with rclpy.node.Node
 import gc
 
 from collections import defaultdict

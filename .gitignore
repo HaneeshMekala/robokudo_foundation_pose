@@ -1,2 +1,15 @@
 __pycache__/
 *.egg-info/
+.venv_fp
+.venv
+
+# large data / recording artifacts - not source code
+*.mcap
+*.bag
+*.ply
+extracted/
+meshes_m/
+noctis_acrambly/
+runs/
+ycbv_objects_1/
+pose_result.jpg

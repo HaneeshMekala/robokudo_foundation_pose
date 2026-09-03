@@ -13,7 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=[
-        'setuptools'
+        'setuptools',
         'numpy',
         'transformers',
         'rclpy',

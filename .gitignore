@@ -7,6 +7,7 @@ __pycache__/
 *.mcap
 *.bag
 *.ply
+*.pth
 extracted/
 meshes_m/
 noctis_acrambly/

@@ -17,7 +17,7 @@ from omegaconf import OmegaConf
 import numpy as np
 import torch
 
-from pytorch3d.transforms import rotation_6d_to_matrix, so3_exp_map
+from robokudo_foundation_pose.transforms import rotation_6d_to_matrix, so3_exp_map
 from robokudo_foundation_pose.Utils import depth_to_vis, egocentric_delta_pose_to_pose, make_grid_image, \
   cv_draw_text, make_mesh_tensors, nvdiffrast_render, transform_pts, compute_crop_window_tf_batch
 from robokudo_foundation_pose.learning.datasets.h5_dataset import PoseRefinePairH5Dataset

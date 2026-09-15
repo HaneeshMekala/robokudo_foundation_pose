@@ -19,8 +19,13 @@ Two things must be true before this gives sensible numbers:
 
 2. For poses in the 'map' frame, Tracy must be on and publishing TF.  While it
    is off, the camera's TF tree is rooted at 'camera_link' and there is no
-   'map', so POSES_IN_MAP_FRAME must stay False and poses come out in
-   'camera_color_optical_frame' - which is fine for checking the estimator.
+   'map', so POSES_IN_MAP_FRAME has to stay False.
+
+Note that POSES_IN_MAP_FRAME only fills 'cas.cam_to_world_transform'; nothing in
+*this* pipeline reads it.  The 'PoseAnnotation' values stay in the camera optical
+frame either way.  The transform is applied by 'Pose2ODConverter', which runs
+inside 'GenerateQueryResult' - so the flag changes the reported frame only once
+the query annotators are added to the pipeline.
 """
 
 import os.path as osp
@@ -52,9 +57,11 @@ OBJECTS = {
 }
 
 # Set to True once Tracy is on and 'map -> camera_color_optical_frame' resolves.
-# It makes the CollectionReader look the viewpoint up, which in turn makes
-# 'GenerateQueryResult' report poses in 'map' instead of the camera frame.
-POSES_IN_MAP_FRAME = False
+# It makes the CollectionReader look the viewpoint up and store the transform in
+# the CAS, which is what lets 'GenerateQueryResult' report poses in 'map'.  On its
+# own it does not change the poses this pipeline produces (see the module
+# docstring) - it is a prerequisite for the query handoff, not a switch for it.
+POSES_IN_MAP_FRAME = True
 
 # (sx, sy) mapping colour pixels to depth pixels.  With depth registered to
 # colour both streams share a resolution and this is (1.0, 1.0).  If the driver
@@ -100,7 +107,21 @@ class AnalysisEngine(robokudo.analysis_engine.AnalysisEngineInterface):
         fp_desc.parameters.name_to_obj_id = {
             name: obj_id for obj_id, (_, _, name) in OBJECTS.items()}
 
-        # estimate a pose for objects that have none, refine it on every later frame
+        # Operation modes:
+        #   0 = do nothing (the model is not even loaded)
+        #   1 = estimate a pose for objects that have none, then track it
+        #   2 = only estimate, and only for objects that have no pose yet
+        #   3 = only estimate, treating every object as new on every frame
+        #   4 = only track, using a pose that something else produced
+        #
+        # Note that tracking does not actually engage here: 'ColorBlobDetector'
+        # runs with 'clear_own_hypotheses', so each frame replaces its
+        # 'ObjectHypothesis' objects and last frame's 'PoseAnnotation' goes with
+        # them.  Every hypothesis therefore arrives without a pose and takes the
+        # 'register()' path, which makes mode 1 behave like mode 3.  That is fine
+        # for checking accuracy - every frame is independent, so nothing drifts -
+        # but it is the slow path.  Real tracking needs an 'ObjectAssociator' to
+        # carry hypotheses across frames.
         fp_desc.parameters.operation_mode = 1
         fp_desc.parameters.est_refine_iter = 5
         fp_desc.parameters.track_refine_iter = 2

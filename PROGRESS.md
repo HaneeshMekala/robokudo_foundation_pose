@@ -7,6 +7,79 @@ still blocking the pipeline. Newest entries at the top of the Changelog.
 
 ## Changelog
 
+### 2026-09-15 — Tracy on: TF resolves; operation modes documented; tracking found inert
+
+Tracy powered on, so the robot TF tree is published and **Blocker B is closed**.
+`map -> camera_color_optical_frame` now resolves:
+
+```
+Translation: [0.427, -0.030, 1.774]
+RPY (deg):   [-157.134, 0.891, -90.239]
+```
+
+The camera sits 1.774 m up on `camera_pole`; the full robot tree
+(`left_*`/`right_*` arms, grippers, bases, `l_gripper_tool_frame`, ...) is
+present. Sanity check: an object 0.96 m from the camera lands at map
+z ~ 0.89 m, a plausible table height. `POSES_IN_MAP_FRAME = True` is now valid.
+
+#### `POSES_IN_MAP_FRAME = True` does not change this pipeline's output
+
+It makes `CollectionReader` look the viewpoint up and store
+`cas.cam_to_world_transform`, but **nothing in the current pipeline reads that
+value**. A grep over robokudo shows the only consumer that affects pose output
+is `Pose2ODConverter` (`utils/annotation_conversion.py:251`), which runs inside
+`GenerateQueryResult` — not part of
+`pipeline_init -> CollectionReader -> ColorBlobDetector -> FoundationPoseAnnotator`.
+
+So the `PoseAnnotation` values stay in `camera_color_optical_frame` regardless,
+because `cam_r_w2c` / `cam_t_w2c` are deliberately unset (identity). What does
+change: a TF lookup now happens every frame, so a broken TF will surface as
+lookup errors where previously there were none.
+
+The flag is a **prerequisite** for the query handoff, not a switch for it. It
+starts mattering when `QueryAnnotator()` / `GenerateQueryResult()` are added
+(Phase 4). Comments in the AE were corrected to say so — they previously implied
+the flag alone would change the reported frame.
+
+#### Operation modes
+
+Set by three flags at `foundation_pose_annotator.py:137-139`:
+`with_estimation = mode in [1,2,3]`, `with_tracking = mode in [1,4]`,
+`always_new = mode in [3]`.
+
+| mode | estimation | tracking | behaviour |
+|---|---|---|---|
+| 0 | no | no | Do nothing. `setup()` returns before meshes or networks load; `compute()` returns immediately. No GPU use, no poses |
+| 1 | yes | yes | Estimate a pose for objects that have none, refine the previous pose otherwise |
+| 2 | yes | no | Only estimate, and only for objects with no pose yet |
+| 3 | yes | no | Only estimate, treating every object as new every frame |
+| 4 | no | yes | Only track; needs a pose from elsewhere, never creates one |
+
+The AE had been left on **mode 0**, which silently produces no poses at all —
+the detector still draws masks, so the pipeline looks alive while FoundationPose
+is inert. Restored to **mode 1**, and the mode list is now inline in the file.
+
+#### Tracking never engages in this pipeline (mode 1 behaves as mode 3)
+
+`ColorBlobDetector` runs with `clear_own_hypotheses = True` (default, not
+overridden). Each frame it deletes the `ObjectHypothesis` objects it wrote
+previously and appends fresh ones (`color_blob_detector.py:300`). Last frame's
+`PoseAnnotation` was attached to those deleted objects, so **every hypothesis
+reaches FoundationPose without a prior pose** and takes the `register()` branch.
+
+Consequence: `register()` (expensive — `est_refine_iter=5`, batch 64) runs every
+frame and `track_one()` (cheap — `track_refine_iter=2`) never runs. Walking
+through `load_detections_from_cas` confirms mode 1 and mode 3 take an identical
+path when `pose_annos_empty` is always true.
+
+Not a bug for present purposes: every frame is independent, so there is no drift
+and no error accumulation — good for checking accuracy. But it is the slow path,
+and it explains any disappointing framerate. Real tracking needs either
+`clear_own_hypotheses = False` (the docstring warns hypotheses then pile up in
+the CAS) or, properly, an `ObjectAssociator` to carry hypotheses across frames.
+
+---
+
 ### 2026-09-08 — Q&A: ColorBlobDetector explained, NOCTIS-live sketch (no code changes)
 
 Answered questions about the current pipeline; nothing in the repo was touched.

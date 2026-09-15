@@ -73,16 +73,46 @@ depth image and matched against the CAD extents:
 | 2 | `child_cube_2.ply` | 0.152 x 0.101 x 0.101 |
 
 `operation_mode = 1`: estimate a pose for any object that has none, then refine
-it on every later frame. Estimation is expensive, tracking is cheap.
+it on every later frame. The five modes are:
+
+| mode | estimation | tracking | behaviour |
+|---|---|---|---|
+| 0 | no | no | Do nothing. The model is not even loaded, and no poses are produced — the detector still draws masks, so the pipeline looks alive while FoundationPose is inert |
+| 1 | yes | yes | Estimate a pose for objects that have none, refine the previous pose otherwise |
+| 2 | yes | no | Only estimate, and only for objects with no pose yet |
+| 3 | yes | no | Only estimate, treating every object as new on every frame |
+| 4 | no | yes | Only track; needs a pose from elsewhere, never creates one |
+
+**Tracking does not actually engage in this pipeline.** `ColorBlobDetector` runs
+with `clear_own_hypotheses`, so every frame it replaces its `ObjectHypothesis`
+objects and last frame's `PoseAnnotation` goes with them. Every hypothesis
+therefore arrives without a pose and takes the expensive `register()` path
+(`est_refine_iter=5`, batch 64); `track_one()` (`track_refine_iter=2`) never
+runs, which makes mode 1 behave like mode 3.
+
+That is fine for checking accuracy — each frame is independent, so nothing
+drifts — but it is the slow path, and it is the reason for any disappointing
+framerate. Real tracking needs an `ObjectAssociator` to carry hypotheses across
+frames (setting `clear_own_hypotheses = False` also works, but then hypotheses
+pile up in the CAS).
 
 ### Which frame the poses are in
 
-Currently **`camera_color_optical_frame`**, because Tracy is off and the TF tree
-is rooted at `camera_link` with no `map`.
+**`camera_color_optical_frame`** — and that is still true with
+`POSES_IN_MAP_FRAME = True`.
 
-Once Tracy is on and publishing TF, set `POSES_IN_MAP_FRAME = True` in
-`demo_tracy_cubes_live.py`. That makes the CollectionReader look up the
-viewpoint, which is what causes poses to be reported in `map`.
+The flag makes the CollectionReader look the viewpoint up and store
+`cas.cam_to_world_transform`, but **nothing in this pipeline reads that value**.
+The only consumer that affects pose output is `Pose2ODConverter`
+(`robokudo/utils/annotation_conversion.py:251`), which runs inside
+`GenerateQueryResult` — not currently part of the pipeline. The
+`PoseAnnotation` values stay in the camera optical frame because
+`cam_r_w2c` / `cam_t_w2c` are deliberately unset.
+
+So the flag is a **prerequisite for the query handoff, not a switch for it**.
+Set it once Tracy is on (it is valid then, and a broken TF will surface as
+lookup errors), but expect the reported frame to change only when
+`QueryAnnotator()` and `GenerateQueryResult()` are added to the pipeline.
 
 **Do not** set `cam_r_w2c` / `cam_t_w2c` on the FoundationPose annotator to
 compensate for a missing transform. Two independent camera-to-world transforms
@@ -104,7 +134,7 @@ All in `demo_tracy_cubes_live.py`:
 |---|---|
 | `MESH_DIR` | where the `.ply` files live |
 | `OBJECTS` | id → (mesh, extents, classname); ids must match the detector's `class_id` |
-| `POSES_IN_MAP_FRAME` | `False` until Tracy publishes TF |
+| `POSES_IN_MAP_FRAME` | `False` until Tracy publishes TF; on its own it does not change the reported frame (see above) |
 | `COLOR2DEPTH_RATIO` | `(1.0, 1.0)` with registered depth at colour resolution |
 | `MAX_OBJECT_DISTANCE` | `1.2` m — measured scene sits at ~0.96 m, background beyond ~2.4 m |
 
@@ -277,7 +307,8 @@ folder as a namespace package, which has no `annotator` submodule.
 | `ptxas fatal : Unsupported .version 9.3` | CUDA wheels drifted; pin all to 13.0.88 |
 | `numpy.core.multiarray failed to import` | numpy was upgraded past 1.x; reinstall `numpy==1.26.4` |
 | `cannot import name 'CollectionReaderAnnotator'` | circular import; import `robokudo.descriptors` first |
-| Poses stamped `camera_color_optical_frame`, not `map` | TF to `map` missing — turn Tracy on, then set `POSES_IN_MAP_FRAME = True` |
+| Poses stamped `camera_color_optical_frame`, not `map` | Expected until `GenerateQueryResult()` is in the pipeline. Also needs Tracy on and `POSES_IN_MAP_FRAME = True` |
+| Pipeline runs, masks drawn, but no poses ever appear | `operation_mode` is `0` |
 | Poses wildly wrong / nonsense depth | depth registration off; relaunch driver with `depth_registration:=true` |
 | No detections | check `MAX_OBJECT_DISTANCE`, `hsv_ranges`, `min_pixel_area` against the actual scene |
 

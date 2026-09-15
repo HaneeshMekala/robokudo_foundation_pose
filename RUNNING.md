@@ -6,6 +6,8 @@ changed to make it work on this machine.
 Companion document: `PROGRESS.md` is the dated work log with the reasoning
 behind each decision. This file is the operational summary.
 
+## New Progress with querys
+
 ---
 
 ## 1. Quick start

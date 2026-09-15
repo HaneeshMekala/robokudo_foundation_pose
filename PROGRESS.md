@@ -5,6 +5,8 @@ still blocking the pipeline. Newest entries at the top of the Changelog.
 
 ---
 
+
+## new Progress
 ## Changelog
 
 ### 2026-09-15 — Tracy on: TF resolves; operation modes documented; tracking found inert

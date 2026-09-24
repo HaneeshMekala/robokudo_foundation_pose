@@ -5,9 +5,163 @@ still blocking the pipeline. Newest entries at the top of the Changelog.
 
 ---
 
-
-## new Progress
 ## Changelog
+
+### 2026-09-24 — Query wiring recovered from a stash (it was never committed)
+
+The `QueryAnnotator` / `GenerateQueryResult` wiring was missing from
+`demo_tracy_cubes_live.py`, and the query sections were missing from both
+documents. Nothing was lost - all three were sitting in `stash@{0}`.
+
+**What happened.** The reflog reads:
+
+```
+47164f1 HEAD@{0}: commit: New updates and Progress
+b094d6b HEAD@{1}: commit: For getting query poses messages
+7bfac9b HEAD@{2}: reset: moving to HEAD
+7bfac9b HEAD@{3}: commit: some changes and documentation
+```
+
+and `git stash list` shows `stash@{0}: WIP on main: 7bfac9b`. So after
+`7bfac9b` was committed, a `git stash` (with the `reset: moving to HEAD` beside
+it) swept every *modified tracked* file back to the committed state and parked
+them in the stash. The pattern fits exactly what went missing:
+
+| edit | kind | outcome |
+|---|---|---|
+| `demo_tracy_cubes_live.py` query wiring | modified tracked file | stashed |
+| `RUNNING.md` query sections | modified tracked file | stashed |
+| `PROGRESS.md` query entry | modified tracked file | stashed |
+| `query_cube_poses.py` | **new, untracked** | untouched -> committed in `b094d6b` |
+
+`git stash` leaves untracked files alone unless given `-u`, which is why the
+client survived while the three edits to existing files did not. The two commits
+made afterwards therefore captured a tree that no longer had them.
+
+**Recovery.** Restored file by file with `git checkout stash@{0} -- <path>`
+rather than `git stash pop`, because the working tree had newer edits
+(`RUNNING.md`, `demo_colored_cubes.py`). Checked first that nothing would be
+lost: the only content added to the docs after the stash's base was two stray
+headings (`## new Progress`, `## New Progress with querys`), one of which had
+already been deleted again. The restored AE is byte-identical to the stashed
+version and compiles. `stash@{0}` is intentionally left in place as a backup;
+`git stash drop stash@{0}` removes it once the restore is committed.
+
+**Stale duplicates at the repository root.** `demo_tracy_cubes_live.py`,
+`color_blob_detector.py` and `foundation_pose_annotator.py` (untracked, dated
+Sep 24 13:44) are copies of the package files. The root
+`demo_tracy_cubes_live.py` is the version **without** the query wiring, so
+copying it back over the package file would undo this restore. Either delete
+them or treat the package copy under
+`robokudo_foundation_pose/robokudo_foundation_pose/` as the only real one.
+
+**Lesson:** commit work before running `git stash`, and check `git stash list`
+whenever tracked edits seem to have vanished while new files survived.
+
+---
+
+### 2026-09-15 — Query handoff wired; `query_cube_poses.py` validation client
+
+#### What FoundationPose returns
+
+A **full 6D pose per object**: position (m) + orientation quaternion (x y z w),
+one per object (`est_num_pose_hypothesis = 1`). It is the pose of the **mesh's
+own frame**; both meshes are recentred on their bounding box, so the position is
+the **geometric centre of the bounding box** and the orientation is the mesh
+axes (`child_cube_0`: 20.3 cm side = mesh y; `child_cube_2`: 15.2 cm side =
+mesh x). Stored in the CAS in `camera_color_optical_frame`.
+
+#### The `table` frame is the right reference
+
+`view_frames` shows the robot's TF root is `table`:
+`map -> table -> {camera_link, camera_pole, left_arm_mount, right_arm_mount}`.
+Looked up via tf2:
+
+```
+map   -> table                       t=[0.000 0.000 0.880]  q=identity
+table -> camera_color_optical_frame  t=[0.427 -0.030 0.894]
+table -> left_base_link              t=[0.135  0.051 0.173]
+table -> right_base_link             t=[0.135 -0.051 0.173]
+```
+
+`map -> table` is a pure lift, so a `table` z is a height above the tabletop.
+**Cross-check of the extrinsics:** camera 0.894 m above `table`, optical axis
+at cos 0.921 from vertical, predicts 0.894 / 0.921 = **0.971 m** to the table
+along the axis; the depth sensor measured **0.970 m** at the image centre on
+2026-09-08. Calibration and depth agree to ~1 mm, and the `table` origin is on
+the tabletop.
+
+#### Changes
+
+**`demo_tracy_cubes_live.py`** — new `QUERY_DRIVEN` flag (default `True`) wraps
+the perception chain as
+`pipeline_init -> QueryAnnotator -> CollectionReader -> ColorBlobDetector -> FoundationPoseAnnotator -> GenerateQueryResult`.
+`QueryAnnotator` returns RUNNING until a goal arrives, so each query processes
+**one fresh frame**. `False` restores the continuous, query-less pipeline for
+watching the overlay. Also fixed the stale `ros2 run robokudo main` in the
+docstring (`robokudo_ros`).
+
+Facts about the answer, from reading robokudo:
+- served on `/robokudo/query` (the server is created by robokudo's `main.py`
+  regardless of the AE; `QueryAnnotator` reuses it via the blackboard);
+- `ObjectDesignator.type` = `Classification.classname`; `pose[0]` is a
+  `PoseStamped` in `map` when the viewpoint was looked up, `pose_source[0]` =
+  `FoundationPose`;
+- **the goal's contents are not used as a filter** — every detected object is
+  returned;
+- **the stamp carries whole seconds only** — `Pose2ODConverter` copies
+  `header.stamp.sec` and drops nanoseconds.
+
+**`query_cube_poses.py`** (new, repo root) — sends a `Query` goal, prints the
+exact `PoseStamped` the planners receive, then transforms it into `table` and
+reports: height above table; **expected height** if resting on the table,
+`0.5 * |R[2,:]| . extents` using the *mesh's* extents (read from the `.ply`,
+not duplicated) and the *estimated* orientation, and the resulting **vertical
+error**; which mesh axis is up and its tilt; yaw of the longest horizontal side,
+folded modulo 180 deg (90 deg for a square footprint). `--repeat N` adds mean /
+std / max-min per axis. `--action` selects the action name.
+
+#### Verification
+
+- Geometry unit checks on the real meshes (7/7): flat bar -> half of the mesh's
+  z extent (0.049998 m, float32 in the PLY), bar on end -> 0.1015, yaw
+  invariance, L-assembly on its x and z faces, yaw folding, 180 deg invariance.
+- End to end against a **mock Query server on `/test_query`** (so the live
+  server was not touched), using the robot's real TF. Planted poses came back
+  exactly: bar at height 0.0250, error 0.0 mm; L-assembly planted 7 mm high ->
+  error **+7.0 mm**; L-assembly `Rz(30)*Ry(90)` -> upward axis x, tilt 0.0,
+  yaw **+30.0 deg**; a designator with no pose -> "detected, but no pose".
+- Timeout path: clean exit code 1 with a hint, goal ends **CANCELED** on the
+  server.
+- **Not yet run against the real pipeline with real cubes** — that needs a
+  restart of the pipeline and a cube placed on the table.
+
+#### Problems hit while building it
+
+- **Two executors on one node.** A first version used
+  `TransformListener(..., spin_thread=True)`, which spins the *same* node from a
+  second executor thread while the action calls spin it from the main thread —
+  a race, surfacing as `InvalidHandle` tracebacks at teardown. Now a single
+  executor: TF is filled whenever the node spins, and `in_table_frame` spins
+  until `can_transform` if needed.
+- **Test goals left on the live pipeline.** Before cancellation was added, test
+  runs sent goals to the running pipeline (started 15:27, before the edit, so
+  query-less). On its server: 1 goal EXECUTING, 3 CANCELING — robokudo only
+  finalises a cancel when a query-aware pipeline acknowledges it
+  (`GenerateQueryResult` checks `preempt_requested()`). **Harmless**:
+  `ActionServerPresentAndDone` skips all server checks unless a `QueryAnnotator`
+  registered itself, so that pipeline never looks at them; they vanish when it is
+  restarted. The client now cancels its goal on timeout or Ctrl+C.
+- The mock server crashed once on an int quaternion `(0, 0, 0, 1)` — rosidl's C
+  layer asserts `PyFloat_Check`. A mock bug, not a client bug.
+
+#### To use it
+
+Restart the pipeline (the running one predates the change; `--symlink-install`
+means no rebuild is needed), place a cube flat on the table, then
+`python query_cube_poses.py`, and `--repeat 10` for repeatability.
+
+---
 
 ### 2026-09-15 — Tracy on: TF resolves; operation modes documented; tracking found inert
 

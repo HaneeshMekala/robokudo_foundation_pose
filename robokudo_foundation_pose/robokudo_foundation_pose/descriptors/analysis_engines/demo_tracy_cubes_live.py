@@ -4,7 +4,12 @@ This is the bring-up pipeline: colour+size segmentation produces the masks and
 FoundationPose turns each mask into a 6D pose, which it then tracks.  Unlike the
 '.mcap' demos, the frames come straight off the camera.
 
-    ros2 run robokudo main _ae=demo_tracy_cubes_live _ros_pkg=robokudo_foundation_pose
+    ros2 run robokudo_ros main _ae=demo_tracy_cubes_live _ros_pkg=robokudo_foundation_pose
+
+With QUERY_DRIVEN = True the pipeline answers 'robokudo_msgs/action/Query'
+goals on '/robokudo/query': each goal grabs a fresh frame, detects, estimates
+and replies with one 'ObjectDesignator' per object.  'query_cube_poses.py' at
+the repository root is a client that also checks the poses against the table.
 
 Two things must be true before this gives sensible numbers:
 
@@ -39,6 +44,7 @@ import robokudo.pipeline
 # ("cannot import name 'CollectionReaderAnnotator' ... partially initialized").
 from robokudo.descriptors import CrDescriptorFactory
 from robokudo.annotators.collection_reader import CollectionReaderAnnotator
+from robokudo.annotators.query import GenerateQueryResult, QueryAnnotator
 
 from robokudo_foundation_pose.annotator.color_blob_detector import ColorBlobDetector
 from robokudo_foundation_pose.annotator.foundation_pose_annotator import FoundationPoseAnnotator
@@ -62,6 +68,12 @@ OBJECTS = {
 # own it does not change the poses this pipeline produces (see the module
 # docstring) - it is a prerequisite for the query handoff, not a switch for it.
 POSES_IN_MAP_FRAME = True
+
+# True: the pipeline waits for a 'Query' goal, then processes one fresh frame
+# and replies with the poses - this is what the planning team talks to.
+# False: it runs continuously, frame after frame, with no action interface -
+# handy for watching the overlay while arranging the scene.
+QUERY_DRIVEN = True
 
 # (sx, sy) mapping colour pixels to depth pixels.  With depth registered to
 # colour both streams share a resolution and this is (1.0, 1.0).  If the driver
@@ -133,12 +145,22 @@ class AnalysisEngine(robokudo.analysis_engine.AnalysisEngineInterface):
         # the query result, using the TF viewpoint from the CAS; setting them
         # here as well would apply the transform twice.
 
+        perception = [
+            CollectionReaderAnnotator(descriptor=reader_config),
+            ColorBlobDetector(descriptor=detector_desc),
+            FoundationPoseAnnotator(descriptor=fp_desc),
+        ]
+
+        if QUERY_DRIVEN:
+            # 'QueryAnnotator' returns RUNNING until a goal arrives, so it gates
+            # the rest of the sequence: one query, one fresh frame.
+            # 'GenerateQueryResult' then turns every 'ObjectHypothesis' into an
+            # 'ObjectDesignator' - 'type' from the classname, 'pose' from the
+            # 'PoseAnnotation', transformed into 'map' when the viewpoint was
+            # looked up (POSES_IN_MAP_FRAME).  It does not filter by the goal's
+            # contents: every detected object is returned.
+            perception = [QueryAnnotator(), *perception, GenerateQueryResult()]
+
         seq = robokudo.pipeline.Pipeline("TracyCubesLivePipeline")
-        seq.add_children(
-            [
-                robokudo.idioms.pipeline_init(),
-                CollectionReaderAnnotator(descriptor=reader_config),
-                ColorBlobDetector(descriptor=detector_desc),
-                FoundationPoseAnnotator(descriptor=fp_desc),
-            ])
+        seq.add_children([robokudo.idioms.pipeline_init(), *perception])
         return seq

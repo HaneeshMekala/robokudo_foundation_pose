@@ -6,8 +6,6 @@ changed to make it work on this machine.
 Companion document: `PROGRESS.md` is the dated work log with the reasoning
 behind each decision. This file is the operational summary.
 
-## New Progress with querys
-
 ---
 
 ## 1. Quick start
@@ -48,11 +46,22 @@ Note it is `robokudo_ros`, **not** `robokudo` — the launcher lives in the
 `robokudo_ros` ament package. `ros2 run robokudo main` fails with
 "Package 'robokudo' not found".
 
-### Terminal 3 — watching the result
+### Terminal 3 — asking for poses
 
-The estimator publishes an overlay image (2D box + pose axes) and 3D geometries
-through the standard RoboKudo annotator output, viewable in the RoboKudo
-visualiser.
+With `QUERY_DRIVEN = True` (the default) the pipeline sits idle until it gets a
+`robokudo_msgs/action/Query` goal on `/robokudo/query`, then processes **one
+fresh frame** and replies. Ask it with:
+
+```bash
+cd /home/tracy/robokudo_foundation_pose
+source env_fp_tracy.sh
+python query_cube_poses.py               # one query
+python query_cube_poses.py --repeat 10   # repeatability over 10 queries
+```
+
+To watch the overlay continuously while arranging the scene, set
+`QUERY_DRIVEN = False` — the pipeline then runs frame after frame, but has no
+query interface.
 
 ---
 
@@ -128,7 +137,63 @@ unset so the TF path is the single source of truth.
 
 ---
 
-## 3. Tuning
+## 3. What FoundationPose returns, and checking it
+
+**A full 6D pose per object:** position (x, y, z in metres) plus orientation (a
+quaternion, x y z w). One pose per object (`est_num_pose_hypothesis = 1`).
+
+It is the pose of the **mesh's own frame**. Both cube meshes were recentred on
+their bounding box, so:
+
+- **position = the geometric centre of the object's bounding box** — not a
+  corner, not the bottom face;
+- **orientation = the mesh axes.** For `child_cube_0` the 20.3 cm long side is
+  mesh **y**; for `child_cube_2` the 15.2 cm side is mesh **x**.
+
+Inside the pipeline it is stored in `camera_color_optical_frame`.
+`GenerateQueryResult` transforms it into **`map`** (when
+`POSES_IN_MAP_FRAME = True`) and sends each object as an `ObjectDesignator`:
+
+| field | content |
+|---|---|
+| `type` | classname, `child_cube_0` / `child_cube_2` |
+| `pose[0]` | `geometry_msgs/PoseStamped`, `frame_id: map` |
+| `pose_source[0]` | `FoundationPose` |
+
+The planning team reads `result.res[i].pose[0]`. Two details to pass on:
+the stamp carries **whole seconds only** (`Pose2ODConverter` drops the
+nanoseconds), and **every detected object is returned** — the goal's contents
+are not used as a filter.
+
+### The reference: the `table` frame
+
+The robot's TF root is `table`; `map -> table` is a pure +0.880 m lift with no
+rotation, so the `table` frame's origin lies on the tabletop and **a `table`
+z coordinate is a height above the table**. This was cross-checked: the camera
+sits 0.894 m above `table` with its optical axis cos 0.921 from vertical,
+predicting 0.971 m to the table along the axis; the depth sensor measured
+0.970 m.
+
+### Checking a pose
+
+`query_cube_poses.py` prints, per object, exactly what the planners receive and
+then:
+
+- position in the `table` frame;
+- **expected height** of the centre if the object rests on the table — worked
+  out from the mesh and the *estimated* orientation — and the **vertical
+  error**. A cube lying flat should come out at half its thickness: 25 mm for
+  the bar, 50.5 mm for the assembly on a 10.1 cm face, 76 mm standing on its
+  15.2 cm side;
+- which mesh axis points up and its tilt — should be near 0 deg for a cube
+  lying on a face;
+- the yaw of the longest horizontal side, folded modulo 180 deg (90 deg for a
+  square footprint), for comparison with a protractor or tape measure.
+
+The procedure: place a cube flat on the table, measure its centre's x/y from
+the `table` origin, run the script, compare. Then `--repeat 10` for spread.
+
+## 4. Tuning
 
 All in `demo_tracy_cubes_live.py`:
 
@@ -138,6 +203,7 @@ All in `demo_tracy_cubes_live.py`:
 | `OBJECTS` | id → (mesh, extents, classname); ids must match the detector's `class_id` |
 | `POSES_IN_MAP_FRAME` | `False` until Tracy publishes TF; on its own it does not change the reported frame (see above) |
 | `COLOR2DEPTH_RATIO` | `(1.0, 1.0)` with registered depth at colour resolution |
+| `QUERY_DRIVEN` | `True`: answer `Query` goals, one frame each; `False`: run continuously |
 | `MAX_OBJECT_DISTANCE` | `1.2` m — measured scene sits at ~0.96 m, background beyond ~2.4 m |
 
 Detector parameters worth touching if detections are poor: `hsv_ranges`,
@@ -145,7 +211,7 @@ Detector parameters worth touching if detections are poor: `hsv_ranges`,
 
 ---
 
-## 4. Environment
+## 5. Environment
 
 `source env_fp_tracy.sh` sets up everything. It:
 
@@ -211,13 +277,14 @@ This happened once during setup (`pip install transformations` pulled numpy
 
 ---
 
-## 5. Changes made to the repository
+## 6. Changes made to the repository
 
 | file | status | what |
 |---|---|---|
 | `robokudo_foundation_pose/transforms.py` | **new** | Vendored `so3_exp_map`, `rotation_6d_to_matrix`, `hat` — removes the pytorch3d dependency |
 | `learning/training/predict_pose_refine.py` | modified | line 20 now imports those from `robokudo_foundation_pose.transforms` instead of `pytorch3d.transforms` |
-| `descriptors/analysis_engines/demo_tracy_cubes_live.py` | **new** | The live AE for Tracy's camera and the two cubes |
+| `descriptors/analysis_engines/demo_tracy_cubes_live.py` | **new** | The live AE for Tracy's camera and the two cubes, with `QueryAnnotator` / `GenerateQueryResult` |
+| `query_cube_poses.py` | **new** | Query client that checks poses against the table |
 | `env_fp_tracy.sh` | **new** | Environment for this machine, replacing `env_fp.sh` |
 | `setup_cuda_home.sh` | **new** | Builds the pip `CUDA_HOME` tree; idempotent |
 | `PROGRESS.md` | **new** | Dated work log |
@@ -262,7 +329,7 @@ direct-import style and will hit this against the current robokudo.
 
 ---
 
-## 6. Workspace / build
+## 7. Workspace / build
 
 Both packages are symlinked into the ROS workspace:
 
@@ -300,7 +367,7 @@ folder as a namespace package, which has no `annotator` submodule.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | symptom | cause |
 |---|---|
@@ -311,12 +378,14 @@ folder as a namespace package, which has no `annotator` submodule.
 | `cannot import name 'CollectionReaderAnnotator'` | circular import; import `robokudo.descriptors` first |
 | Poses stamped `camera_color_optical_frame`, not `map` | Expected until `GenerateQueryResult()` is in the pipeline. Also needs Tracy on and `POSES_IN_MAP_FRAME = True` |
 | Pipeline runs, masks drawn, but no poses ever appear | `operation_mode` is `0` |
+| `query failed: no answer within N s` | the action server exists (robokudo always creates it) but nothing consumes goals — `QUERY_DRIVEN` is `False`, or a pipeline started before the change is still running |
+| Overlay only updates when a query is sent | expected with `QUERY_DRIVEN = True`; set it to `False` to watch continuously |
 | Poses wildly wrong / nonsense depth | depth registration off; relaunch driver with `depth_registration:=true` |
 | No detections | check `MAX_OBJECT_DISTANCE`, `hsv_ranges`, `min_pixel_area` against the actual scene |
 
 ---
 
-## 8. Not done yet
+## 9. Not done yet
 
 - **NOCTIS is not integrated.** `NoctisDetectionReader` replays pre-computed
   BOP-style JSON from disk and cannot run live; `demo_tetris_noctis.py` is
@@ -324,11 +393,11 @@ folder as a namespace package, which has no `annotator` submodule.
   recommended one is to run NOCTIS as a separate ROS 2 node behind
   `robokudo_msgs/action/GenericImgProcAnnotator` and write a client annotator,
   which keeps its dependencies out of this venv.
-- **The planning-team handoff is not wired up.** Add `QueryAnnotator()` after
-  `pipeline_init()` and `GenerateQueryResult()` as the last child of the
-  pipeline, then poses are served over `robokudo_msgs/action/Query` on
-  `/robokudo/query`. `robokudo/descriptors/analysis_engines/robokudo_cram_integration.py`
-  is a working client to hand them.
+- **The query handoff is wired but not yet validated on real cubes.** Poses are
+  served over `robokudo_msgs/action/Query` on `/robokudo/query`;
+  `query_cube_poses.py` is the checking tool, and
+  `robokudo/descriptors/analysis_engines/robokudo_cram_integration.py` is a
+  reference client for the planning team.
 - **Accuracy has not been validated** against ground truth, and the cubes are
   symmetric — FoundationPose may return an orientation that is correct up to a
   symmetry. Confirm the planners' grasping tolerates that, or supply

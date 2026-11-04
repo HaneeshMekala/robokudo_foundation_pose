@@ -287,6 +287,7 @@ This happened once during setup (`pip install transformations` pulled numpy
 | `query_cube_poses.py` | **new** | Query client that checks poses against the table |
 | `env_fp_tracy.sh` | **new** | Environment for this machine, replacing `env_fp.sh` |
 | `setup_cuda_home.sh` | **new** | Builds the pip `CUDA_HOME` tree; idempotent |
+| `install_pytorch3d.sh` | **new** | Builds pytorch3d (CUDA 13-compatible `main`) into the robokudo venv and verifies it |
 | `PROGRESS.md` | **new** | Dated work log |
 | `RUNNING.md` | **new** | This file |
 
@@ -310,6 +311,35 @@ orthonormal with `det == 1` to 6.3e-10 throughout.
 
 Only `so3_exp_map` is actually reached, since the refiner config sets
 `rot_rep: axis_angle`.
+
+> **Correction (2026-11-04):** the cause of the link error is now known, and
+> pytorch3d builds — see "Building pytorch3d" below. Also, the small-angle
+> deviation above is the behaviour of pytorch3d **<= 0.7.5**. Since upstream
+> `292acc7` (Jan 2024) `so3_exp_map` goes through `axis_angle_to_matrix` and is
+> exact near zero; against current pytorch3d the vendored copy differs by up to
+> 6.3e-08 at 0.01 rad and by ~1e-15 above that.
+
+### Building pytorch3d
+
+```bash
+bash install_pytorch3d.sh
+```
+
+The link error came from the version, not the machine. `@stable` and v0.7.9
+predate upstream commit `f5f6b78` (2025-12-17), which adds
+`--device-entity-has-hidden-visibility=false -static-global-template-stub=false`
+to nvcc for CUDA >= 13 builds of torch. Without those flags CUDA 13 hides the
+explicitly instantiated `pulsar::Renderer::render<true>` from the linker. The
+script therefore builds a pinned commit from `main` (`e4ad6e5`), with
+`FORCE_CUDA=1`, `CUB_HOME=$CUDA_HOME/include/cccl` (CUDA 13 moved CUB/Thrust
+there; `nvidia-cuda-cccl==13.0.85` is installed into `.venv_fp` if it is missing),
+clones the source to `~/src/pytorch3d` (never inside this repo), installs with
+`--no-deps` plus a numpy pin, and finishes by running a CUDA kernel
+(`knn_points`), building a pulsar `Renderer` and calling the two transforms.
+
+The same build was tested on a replica of this stack (Python 3.12.3, gcc 13.3,
+torch 2.12.1+cu130, toolkit 13.0.88, sm_86): ~9 minutes on 4 cores, 0
+undefined pulsar symbols. Re-run the script after any torch upgrade.
 
 ### Import order in the AE
 
@@ -375,6 +405,8 @@ folder as a namespace package, which has no `annotator` submodule.
 | `nvcc : MISSING` from the env script | run `bash setup_cuda_home.sh` |
 | `ptxas fatal : Unsupported .version 9.3` | CUDA wheels drifted; pin all to 13.0.88 |
 | `numpy.core.multiarray failed to import` | numpy was upgraded past 1.x; reinstall `numpy==1.26.4` |
+| `undefined reference to pulsar::Renderer::render<true>` | pytorch3d `@stable`/0.7.9 under CUDA 13; use `install_pytorch3d.sh` (builds `main`) |
+| `cub/cub.cuh: No such file or directory` while building pytorch3d | `nvidia-cuda-cccl==13.0.85` missing, or `CUB_HOME` not `$CUDA_HOME/include/cccl` |
 | `cannot import name 'CollectionReaderAnnotator'` | circular import; import `robokudo.descriptors` first |
 | Poses stamped `camera_color_optical_frame`, not `map` | Expected until `GenerateQueryResult()` is in the pipeline. Also needs Tracy on and `POSES_IN_MAP_FRAME = True` |
 | Pipeline runs, masks drawn, but no poses ever appear | `operation_mode` is `0` |

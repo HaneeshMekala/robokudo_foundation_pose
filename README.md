@@ -48,6 +48,8 @@ pip3 install --no-build-isolation --no-cache-dir git+https://github.com/NVlabs/n
 pip3 install --no-build-isolation --no-cache-dir "git+https://github.com/facebookresearch/pytorch3d.git@stable"
 ```
 
+Note: with a CUDA 13 build of torch, `pytorch3d@stable` (and v0.7.9) fails to link (`undefined reference to pulsar::Renderer::render<true>`); the fix only exists on `main`. Use `bash install_pytorch3d.sh`, which builds a tested `main` commit, or replace `@stable` with `@e4ad6e5`.
+
 Note: For CUDA <= 11.8 Version you may additionally need to call ```export NVCC_APPEND_FLAGS="-ccbin g++-11"```, otherwise the last two packages may fail to compile.
 
 

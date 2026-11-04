@@ -7,6 +7,56 @@ still blocking the pipeline. Newest entries at the top of the Changelog.
 
 ## Changelog
 
+### 2026-11-04 — pytorch3d link error explained; `install_pytorch3d.sh`
+
+**Cause.** `undefined reference to pulsar::Renderer::render<true>` is a version
+problem, not a machine problem. CUDA 13 changed the default ELF visibility of
+`__global__` functions and template stubs. Upstream fixed it in `f5f6b78`
+(2025-12-17), which passes `--device-entity-has-hidden-visibility=false
+-static-global-template-stub=false` to nvcc when `torch.version.cuda >= 13`.
+That commit is **after** the `stable` tag and the v0.7.9 release, and the
+README installs `@stable`, so every earlier attempt built code without the fix.
+
+**Tested on a replica of this machine's stack** (Python 3.12, gcc 13.3,
+torch 2.12.1+cu130 from PyPI, `cuda-toolkit[nvcc]` with nvcc/nvvm/crt at
+13.0.88, `setup_cuda_home.sh` unchanged, `nvidia-cuda-cccl==13.0.85`,
+`TORCH_CUDA_ARCH_LIST=8.6`, `FORCE_CUDA=1`), building `main` @ `e4ad6e5`:
+
+| check | result |
+|---|---|
+| build | succeeded, 9m16s on 4 cores, 58 MB wheel |
+| undefined `pulsar` symbols in `_C.so` | 0 |
+| `pulsar::Renderer::render` defined | yes (2 instantiations) |
+| `import pytorch3d._C`, `PulsarRenderer`, pulsar `Renderer(...)` | OK |
+| `knn_points` | OK (CPU only there; the script runs it on CUDA) |
+| `rotation_6d_to_matrix` vs `transforms.py` | identical (0.0) |
+| `so3_exp_map` vs `transforms.py` | 6.3e-08 at 0.01 rad, <= 2e-15 at >= 1 rad |
+
+The `so3_exp_map` gap is because `transforms.py` copies the **pre-2024**
+upstream implementation. Upstream `292acc7` (2024-01) moved to
+`axis_angle_to_matrix`, which is exact near zero, so the 2026-09-08 entry's
+statement that the clamp deviation is "upstream pytorch3d's own behaviour" only
+holds for pytorch3d <= 0.7.5. The size of the gap does not matter for pose
+estimation.
+
+**CUB headers:** CUDA 13 moved CUB/Thrust to `include/cccl/`, and
+`cuda-toolkit[nvcc]` does not ship them. `nvidia-cuda-cccl==13.0.85` (header-only,
+13.0 series) provides them; pytorch3d is pointed at them with
+`CUB_HOME=$CUDA_HOME/include/cccl`.
+
+**New: `install_pytorch3d.sh`.** It sources `env_fp_tracy.sh`, installs cccl
+into `.venv_fp` if it is missing, clones to `~/src/pytorch3d` (outside the repo,
+because of the namespace-package shadowing incident), checks out the pinned
+commit and refuses one without the fix, builds a wheel, installs it into the
+robokudo venv with `--no-deps` plus `iopath "numpy==1.26.4"`, then verifies:
+numpy still 1.26.4, `knn_points` on CUDA, a pulsar `Renderer` on CUDA, and both
+transforms.
+
+**Not yet done:** running the script on Tracy's machine.
+`predict_pose_refine.py` still imports from `robokudo_foundation_pose.transforms`.
+
+---
+
 ### 2026-09-24 — Query wiring recovered from a stash (it was never committed)
 
 The `QueryAnnotator` / `GenerateQueryResult` wiring was missing from

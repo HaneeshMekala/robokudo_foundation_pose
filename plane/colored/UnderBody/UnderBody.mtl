@@ -1,0 +1,7 @@
+newmtl UnderBody
+Ka 1.000000 1.000000 1.000000
+Kd 0.843137 0.156863 0.117647
+Ks 0.000000 0.000000 0.000000
+d 1.0
+illum 1
+map_Kd UnderBody.png

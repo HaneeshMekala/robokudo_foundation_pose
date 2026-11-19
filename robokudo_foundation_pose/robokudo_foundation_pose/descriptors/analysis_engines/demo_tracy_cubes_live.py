@@ -125,16 +125,8 @@ class AnalysisEngine(robokudo.analysis_engine.AnalysisEngineInterface):
         #   2 = only estimate, and only for objects that have no pose yet
         #   3 = only estimate, treating every object as new on every frame
         #   4 = only track, using a pose that something else produced
-        #
-        # Note that tracking does not actually engage here: 'ColorBlobDetector'
-        # runs with 'clear_own_hypotheses', so each frame replaces its
-        # 'ObjectHypothesis' objects and last frame's 'PoseAnnotation' goes with
-        # them.  Every hypothesis therefore arrives without a pose and takes the
-        # 'register()' path, which makes mode 1 behave like mode 3.  That is fine
-        # for checking accuracy - every frame is independent, so nothing drifts -
-        # but it is the slow path.  Real tracking needs an 'ObjectAssociator' to
-        # carry hypotheses across frames.
-        fp_desc.parameters.operation_mode = 1
+
+        fp_desc.parameters.operation_mode = 3
         fp_desc.parameters.est_refine_iter = 5
         fp_desc.parameters.track_refine_iter = 2
         fp_desc.parameters.est_batch_size = 64

@@ -14,3 +14,7 @@ noctis_acrambly/
 runs/
 ycbv_objects_1/
 pose_result.jpg
+extra_files/
+log/
+install/
+build/
